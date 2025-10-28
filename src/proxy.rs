@@ -8,6 +8,7 @@ use pingora_load_balancing::{
     LoadBalancer,
 };
 use pingora_proxy::{ProxyHttp, Session};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::cluster::ClusterManager;
@@ -15,6 +16,7 @@ use crate::cluster::ClusterManager;
 pub struct ClusterProxy {
     local_lb: Arc<LoadBalancer<RoundRobin>>,
     cluster: Arc<ClusterManager>,
+    request_counter: AtomicUsize, // For round-robin across local/remote
 }
 
 impl ClusterProxy {
@@ -34,7 +36,11 @@ impl ClusterProxy {
     }
 
     pub fn new(local_lb: Arc<LoadBalancer<RoundRobin>>, cluster: Arc<ClusterManager>) -> Self {
-        ClusterProxy { local_lb, cluster }
+        ClusterProxy {
+            local_lb,
+            cluster,
+            request_counter: AtomicUsize::new(0),
+        }
     }
 }
 
@@ -49,35 +55,45 @@ impl ProxyHttp for ClusterProxy {
         session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>, Box<Error>> {
-        // Check if the request is from a peer node
-        let _is_peer_request = if let Some(client_addr) = session.client_addr() {
-            let peer_ips = self.cluster.get_peer_addresses();
-            let client_ip = client_addr.as_inet().map(|addr| addr.ip());
+        // Weighted round-robin selection across all backends (local + remote)
+        // Weight: local backends count individually, each remote peer represents their backends
 
-            let is_peer = client_ip
-                .map(|ip| peer_ips.iter().any(|peer| peer.ip() == ip))
-                .unwrap_or(false);
+        let peer_proxies = self.cluster.get_peer_proxy_addresses().await;
+        let local_backend_count = self.cluster.backend_count() as usize;
 
-            if is_peer {
-                println!("🔗 Peer request detected from: {}", client_addr);
-            } else {
-                println!("👤 Client request from: {}", client_addr);
-            }
+        // Total weight = local backend count + number of remote peers
+        // (each remote peer is weighted as 1 for now, will use dynamic metadata later)
+        let total_weight = local_backend_count + peer_proxies.len();
 
-            is_peer
+        if total_weight == 0 {
+            return Err(Error::new(ErrorType::ConnectError));
+        }
+
+        // Round-robin across total weight
+        let request_num = self.request_counter.fetch_add(1, Ordering::Relaxed);
+        let target_idx = request_num % total_weight;
+
+        if target_idx < local_backend_count {
+            // Route to local backend
+            let upstream = self
+                .local_lb
+                .select(b"", 256)
+                .ok_or_else(|| Error::new(ErrorType::ConnectError))?;
+
+            println!("→ Routing to local backend");
+            Ok(Box::new(HttpPeer::new(upstream, false, String::new())))
         } else {
-            false
-        };
+            // Route to remote peer
+            let peer_idx = target_idx - local_backend_count;
+            let peer_addr = &peer_proxies[peer_idx];
 
-        // For now, always route to local backends
-        // TODO: If not a peer request, implement two-tier selection (local + remote peers)
-        let upstream = self
-            .local_lb
-            .select(b"", 256)
-            .ok_or_else(|| Error::new(ErrorType::ConnectError))?;
-
-        let peer = Box::new(HttpPeer::new(upstream, false, String::new()));
-        Ok(peer)
+            println!("→ Routing to remote peer: {}", peer_addr);
+            Ok(Box::new(HttpPeer::new(
+                peer_addr.as_str(),
+                false,
+                String::new(),
+            )))
+        }
     }
 
     async fn upstream_request_filter(

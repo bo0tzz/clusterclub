@@ -15,6 +15,7 @@ type Memberlist = TokioTcpMemberlist<SmolStr, TokioSocketAddrResolver, Composite
 pub struct ClusterManager {
     memberlist: Arc<Memberlist>,
     backend_count: u32,
+    proxy_port: u16, // Port where peer proxies listen for HTTP requests
     _runtime: tokio::runtime::Runtime, // Keep runtime alive for memberlist background tasks
 }
 
@@ -25,6 +26,7 @@ impl ClusterManager {
         shared_key: String,
         peers: Vec<String>,
         backend_count: u32,
+        proxy_port: u16,
     ) -> Result<Self> {
         // Create a dedicated tokio runtime for memberlist
         let runtime = tokio::runtime::Runtime::new()
@@ -80,6 +82,7 @@ impl ClusterManager {
         Ok(ClusterManager {
             memberlist,
             backend_count,
+            proxy_port,
             _runtime: runtime,
         })
     }
@@ -109,14 +112,24 @@ impl ClusterManager {
         peers: Vec<String>,
     ) -> Result<()> {
         use memberlist::net::Node;
+        use tokio::net::lookup_host;
 
-        let peer_addrs: Vec<SocketAddr> = peers
-            .iter()
-            .map(|p| {
-                p.parse()
-                    .with_context(|| format!("Failed to parse peer address: {}", p))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        // Resolve peer addresses (supports both IPs and hostnames)
+        let mut peer_addrs = Vec::new();
+        for peer in peers {
+            // Try direct parse first (for IP:port)
+            if let Ok(addr) = peer.parse::<SocketAddr>() {
+                peer_addrs.push(addr);
+            } else {
+                // Otherwise, resolve the hostname
+                let resolved = lookup_host(&peer)
+                    .await
+                    .with_context(|| format!("Failed to resolve peer address: {}", peer))?
+                    .next()
+                    .with_context(|| format!("No addresses found for peer: {}", peer))?;
+                peer_addrs.push(resolved);
+            }
+        }
 
         println!("Attempting to join cluster via {} peers...", peer_addrs.len());
 
@@ -158,26 +171,42 @@ impl ClusterManager {
 
     /// Get list of peer node addresses (for detecting if a request is from a peer)
     /// Returns a list of SocketAddr representing cluster member addresses
-    pub fn get_peer_addresses(&self) -> Vec<SocketAddr> {
-        // Use the memberlist runtime to execute async operations
-        self._runtime.block_on(async {
-            let members = self.memberlist.members().await;
-            members
-                .iter()
-                .filter_map(|member| {
-                    // Get the member's address if it's not the local node
-                    if member.id() != self.memberlist.local_id() {
-                        Some(*member.address())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        })
+    pub async fn get_peer_addresses(&self) -> Vec<SocketAddr> {
+        let members = self.memberlist.members().await;
+        members
+            .iter()
+            .filter_map(|member| {
+                // Get the member's address if it's not the local node
+                if member.id() != self.memberlist.local_id() {
+                    Some(*member.address())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get list of peer proxy addresses for HTTP load balancing
+    /// Derives proxy addresses (IP + proxy_port) from cluster member addresses
+    pub async fn get_peer_proxy_addresses(&self) -> Vec<String> {
+        let members = self.memberlist.members().await;
+        members
+            .iter()
+            .filter_map(|member| {
+                // Get the member's IP and construct proxy address
+                if member.id() != self.memberlist.local_id() {
+                    let cluster_addr = member.address();
+                    // Use the IP from cluster address but with proxy port
+                    let proxy_addr = format!("{}:{}", cluster_addr.ip(), self.proxy_port);
+                    Some(proxy_addr)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     // TODO: Implement methods to:
     // - Get list of cluster members with their metadata
     // - Update local metadata when backend count changes (using NodeDelegate)
-    // - Derive remote node proxy addresses from memberlist addresses
 }

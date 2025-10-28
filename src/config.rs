@@ -51,17 +51,38 @@ impl Config {
         // Ensure we have at least one backend
         anyhow::ensure!(!self.backends.is_empty(), "At least one backend must be configured");
 
-        // Validate that all backend addresses can be parsed
+        // Validate that all backend addresses have host:port format
         for backend in &self.backends {
-            backend.address.parse::<SocketAddr>()
+            Self::validate_address(&backend.address)
                 .with_context(|| format!("Invalid backend address: {}", backend.address))?;
         }
 
         // Validate peer addresses
         for peer in &self.cluster.peers {
-            peer.parse::<SocketAddr>()
+            Self::validate_address(peer)
                 .with_context(|| format!("Invalid peer address: {}", peer))?;
         }
+
+        Ok(())
+    }
+
+    /// Validate that an address is in host:port format
+    fn validate_address(addr: &str) -> Result<()> {
+        // Try parsing as SocketAddr first (for IP:port)
+        if addr.parse::<SocketAddr>().is_ok() {
+            return Ok(());
+        }
+
+        // Otherwise validate hostname:port format
+        let parts: Vec<&str> = addr.rsplitn(2, ':').collect();
+        anyhow::ensure!(parts.len() == 2, "Address must be in host:port format");
+
+        let port = parts[0];
+        let host = parts[1];
+
+        anyhow::ensure!(!host.is_empty(), "Host cannot be empty");
+        port.parse::<u16>()
+            .with_context(|| format!("Invalid port number: {}", port))?;
 
         Ok(())
     }
@@ -89,12 +110,18 @@ mod tests {
             ],
         };
 
-        // This should fail because localhost:3003 isn't a valid SocketAddr
-        assert!(config.validate().is_err());
+        // Both hostnames and IPs should be valid
+        assert!(config.validate().is_ok());
 
-        // Fix it to use IP
         let mut config = config;
         config.backends[0].address = "127.0.0.1:3003".to_string();
         assert!(config.validate().is_ok());
+
+        // Test invalid formats
+        config.backends[0].address = "invalid".to_string();
+        assert!(config.validate().is_err());
+
+        config.backends[0].address = "host:notaport".to_string();
+        assert!(config.validate().is_err());
     }
 }

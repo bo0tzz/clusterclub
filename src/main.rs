@@ -32,6 +32,7 @@ fn main() -> Result<()> {
         config.cluster.shared_key.clone(),
         config.cluster.peers.clone(),
         backend_count,
+        config.proxy.listen_port, // Pass proxy port for deriving peer proxy addresses
     )?);
 
     // Create proxy with local backends

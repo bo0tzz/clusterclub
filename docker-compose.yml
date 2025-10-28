@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # Node 1 backend
+  backend1:
+    image: stefanprodan/podinfo:latest
+    hostname: backend1-node1
+    container_name: backend1
+    networks:
+      - node1_network
+    environment:
+      - PODINFO_PORT=9898
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9898/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Node 1 clusterclub instance
+  node1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    hostname: node1
+    container_name: clusterclub-node1
+    networks:
+      - node1_network
+      - cluster_network
+    ports:
+      - "8080:8080"  # Proxy port
+      - "7946:7946/tcp"  # Cluster port TCP
+      - "7946:7946/udp"  # Cluster port UDP
+    volumes:
+      - ./docker/node1-config.toml:/etc/clusterclub/config.toml:ro
+    depends_on:
+      backend1:
+        condition: service_healthy
+
+  # Node 2 backend
+  backend2:
+    image: stefanprodan/podinfo:latest
+    hostname: backend2-node2
+    container_name: backend2
+    networks:
+      - node2_network
+    environment:
+      - PODINFO_PORT=9898
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9898/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Node 2 clusterclub instance
+  node2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    hostname: node2
+    container_name: clusterclub-node2
+    networks:
+      - node2_network
+      - cluster_network
+    ports:
+      - "8081:8080"  # Proxy port
+      - "7947:7946/tcp"  # Cluster port TCP
+      - "7947:7946/udp"  # Cluster port UDP
+    volumes:
+      - ./docker/node2-config.toml:/etc/clusterclub/config.toml:ro
+    depends_on:
+      backend2:
+        condition: service_healthy
+      node1:
+        condition: service_started
+
+networks:
+  cluster_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+  node1_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+
+  node2_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24

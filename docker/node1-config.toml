@@ -1,0 +1,14 @@
+# Node 1 Configuration (Bootstrap node)
+
+[cluster]
+listen_port = 7946
+shared_key = "docker-cluster-secret-key-123"
+# No peers - this is the bootstrap node
+peers = []
+
+[proxy]
+listen_port = 8080
+
+# Backend on private network
+[[backends]]
+address = "backend1:9898"

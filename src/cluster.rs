@@ -1,27 +1,37 @@
 use anyhow::{Context, Result};
 use memberlist::delegate::CompositeDelegate;
 use memberlist::net::NetTransportOptions;
-use memberlist::proto::{HostAddr, MaybeResolvedAddress, SecretKey};
+use memberlist::proto::{MaybeResolvedAddress, SecretKey};
 use memberlist::tokio::{TokioSocketAddrResolver, TokioTcp, TokioTcpMemberlist};
 use memberlist::Options;
 use smol_str::SmolStr;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+// The memberlist type - explicitly specify delegate with SocketAddr as address type
+type Memberlist = TokioTcpMemberlist<SmolStr, TokioSocketAddrResolver, CompositeDelegate<SmolStr, SocketAddr>>;
+
 /// Cluster manager using memberlist for gossip protocol
 pub struct ClusterManager {
-    memberlist: Arc<TokioTcpMemberlist<SmolStr, SocketAddr>>,
+    memberlist: Arc<Memberlist>,
     backend_count: u32,
+    _runtime: tokio::runtime::Runtime, // Keep runtime alive for memberlist background tasks
 }
 
 impl ClusterManager {
     /// Create and join a memberlist cluster
-    pub async fn new(
+    pub fn new(
         listen_port: u16,
         shared_key: String,
         peers: Vec<String>,
         backend_count: u32,
     ) -> Result<Self> {
+        // Create a dedicated tokio runtime for memberlist
+        let runtime = tokio::runtime::Runtime::new()
+            .context("Failed to create tokio runtime for memberlist")?;
+
+        // Initialize memberlist in the runtime
+        let (memberlist, member_count) = runtime.block_on(async {
         // Generate a unique node ID
         let node_id = SmolStr::new(format!("node-{}", uuid::Uuid::new_v4()));
 
@@ -33,7 +43,7 @@ impl ClusterManager {
         // Create transport options
         let net_opts =
             NetTransportOptions::<SmolStr, TokioSocketAddrResolver, TokioTcp>::new(node_id.clone())
-                .with_bind_addresses([HostAddr::from(listen_addr)].into_iter().collect());
+                .with_bind_addresses([listen_addr].into_iter().collect());
 
         // Create memberlist options with LAN defaults
         let mut opts = Options::lan();
@@ -54,8 +64,6 @@ impl ClusterManager {
             .await
             .context("Failed to create memberlist")?;
 
-        let memberlist = Arc::new(memberlist);
-
         // Join cluster if peers are provided
         if !peers.is_empty() {
             Self::join_peers(&memberlist, peers).await?;
@@ -63,9 +71,16 @@ impl ClusterManager {
             println!("No peers configured - running as single-node cluster");
         }
 
+            let member_count = memberlist.num_online_members().await;
+            Ok::<_, anyhow::Error>((Arc::new(memberlist), member_count))
+        })?;
+
+        println!("Cluster initialized with {} members", member_count);
+
         Ok(ClusterManager {
             memberlist,
             backend_count,
+            _runtime: runtime,
         })
     }
 
@@ -90,7 +105,7 @@ impl ClusterManager {
 
     /// Attempt to join cluster by contacting peers
     async fn join_peers(
-        memberlist: &TokioTcpMemberlist<SmolStr, SocketAddr>,
+        memberlist: &TokioTcpMemberlist<SmolStr, TokioSocketAddrResolver, CompositeDelegate<SmolStr, SocketAddr>>,
         peers: Vec<String>,
     ) -> Result<()> {
         use memberlist::net::Node;
@@ -132,13 +147,33 @@ impl ClusterManager {
     }
 
     /// Get the number of online cluster members
-    pub fn member_count(&self) -> usize {
-        self.memberlist.num_online_members()
+    pub async fn member_count(&self) -> usize {
+        self.memberlist.num_online_members().await
     }
 
     /// Get local backend count
     pub fn backend_count(&self) -> u32 {
         self.backend_count
+    }
+
+    /// Get list of peer node addresses (for detecting if a request is from a peer)
+    /// Returns a list of SocketAddr representing cluster member addresses
+    pub fn get_peer_addresses(&self) -> Vec<SocketAddr> {
+        // Use the memberlist runtime to execute async operations
+        self._runtime.block_on(async {
+            let members = self.memberlist.members().await;
+            members
+                .iter()
+                .filter_map(|member| {
+                    // Get the member's address if it's not the local node
+                    if member.id() != self.memberlist.local_id() {
+                        Some(*member.address())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
     }
 
     // TODO: Implement methods to:

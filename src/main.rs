@@ -5,9 +5,9 @@ mod proxy;
 use anyhow::Result;
 use pingora::server::Server;
 use std::env;
+use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Parse command line arguments
     let args: Vec<String> = env::args().collect();
 
@@ -25,17 +25,14 @@ async fn main() -> Result<()> {
     println!("  Local backends: {}", config.backends.len());
     println!("  Peers: {}", config.cluster.peers.len());
 
-    // Initialize cluster
+    // Initialize cluster (creates its own tokio runtime)
     let backend_count = config.backends.len() as u32;
-    let cluster = cluster::ClusterManager::new(
+    let cluster = Arc::new(cluster::ClusterManager::new(
         config.cluster.listen_port,
         config.cluster.shared_key.clone(),
         config.cluster.peers.clone(),
         backend_count,
-    )
-    .await?;
-
-    println!("Cluster initialized with {} members", cluster.member_count());
+    )?);
 
     // Create proxy with local backends
     let backend_addrs: Vec<String> = config
@@ -58,8 +55,8 @@ async fn main() -> Result<()> {
 
     server.add_service(lb_service);
 
-    // Create proxy with the shared load balancer
-    let proxy = proxy::ClusterProxy::new(lb);
+    // Create proxy with the shared load balancer and cluster manager
+    let proxy = proxy::ClusterProxy::new(lb, cluster);
 
     // Create HTTP proxy service
     let mut proxy_service = pingora_proxy::http_proxy_service(

@@ -1,0 +1,14 @@
+# Node 1 Configuration
+[cluster]
+listen_port = 7946
+shared_key = "test-secret-key-123"
+peers = []
+
+[proxy]
+listen_port = 8080
+
+[[backends]]
+address = "127.0.0.1:3003"
+
+[[backends]]
+address = "127.0.0.1:3004"

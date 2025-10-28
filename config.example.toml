@@ -1,0 +1,29 @@
+# ClusterClub Configuration Example
+
+[cluster]
+# Port for memberlist gossip protocol (default: 7946)
+listen_port = 7946
+
+# Shared secret key for cluster authentication and encryption
+# All nodes in the cluster must use the same key
+shared_key = "your-secret-key-here"
+
+# List of known peer addresses to join the cluster
+# Format: "host:port" where port is the cluster listen_port
+# Can be empty for the first/bootstrap node
+peers = [
+    # "192.168.1.10:7946",
+    # "192.168.1.11:7946",
+]
+
+[proxy]
+# Port for client HTTP requests
+listen_port = 8080
+
+# Local backend servers
+# These are the servers on this machine that will handle proxied requests
+[[backends]]
+address = "127.0.0.1:3003"
+
+[[backends]]
+address = "127.0.0.1:3004"

@@ -1,3 +1,4 @@
+mod cluster;
 mod config;
 mod proxy;
 
@@ -5,7 +6,8 @@ use anyhow::Result;
 use pingora::server::Server;
 use std::env;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Parse command line arguments
     let args: Vec<String> = env::args().collect();
 
@@ -22,6 +24,18 @@ fn main() -> Result<()> {
     println!("  Proxy port: {}", config.proxy.listen_port);
     println!("  Local backends: {}", config.backends.len());
     println!("  Peers: {}", config.cluster.peers.len());
+
+    // Initialize cluster
+    let backend_count = config.backends.len() as u32;
+    let cluster = cluster::ClusterManager::new(
+        config.cluster.listen_port,
+        config.cluster.shared_key.clone(),
+        config.cluster.peers.clone(),
+        backend_count,
+    )
+    .await?;
+
+    println!("Cluster initialized with {} members", cluster.member_count());
 
     // Create proxy with local backends
     let backend_addrs: Vec<String> = config

@@ -8,7 +8,8 @@ pingora = "0.6"
 pingora-core = "0.6"
 pingora-load-balancing = "0.6"
 pingora-proxy = "0.6"
-memberlist = { version = "0.6", features = ["tokio", "quinn", "encryption", "snappy", "dns"] }
+memberlist = { version = "0.6", features = ["tokio", "tcp", "encryption", "snappy"] }
+memberlist-core = "0.6"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"

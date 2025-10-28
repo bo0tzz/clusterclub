@@ -1,18 +1,16 @@
 use anyhow::{Context, Result};
-use memberlist::agnostic::tokio::TokioRuntime;
-use memberlist::quic::{QuicTransport, QuicTransportOptions};
-use memberlist::transport::resolver::socket_addr::SocketAddrResolver;
-use memberlist::types::SecretKey;
-use memberlist::{Memberlist, Options};
+use memberlist::delegate::CompositeDelegate;
+use memberlist::net::NetTransportOptions;
+use memberlist::proto::{HostAddr, MaybeResolvedAddress, SecretKey};
+use memberlist::tokio::{TokioSocketAddrResolver, TokioTcp, TokioTcpMemberlist};
+use memberlist::Options;
 use smol_str::SmolStr;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-type TokioQuicTransport = QuicTransport<SmolStr, SocketAddrResolver<TokioRuntime>, memberlist::quic::stream_layer::quinn::Quinn<TokioRuntime>, TokioRuntime>;
-
 /// Cluster manager using memberlist for gossip protocol
 pub struct ClusterManager {
-    memberlist: Arc<Memberlist<TokioQuicTransport>>,
+    memberlist: Arc<TokioTcpMemberlist<SmolStr, SocketAddr>>,
     backend_count: u32,
 }
 
@@ -27,38 +25,32 @@ impl ClusterManager {
         // Generate a unique node ID
         let node_id = SmolStr::new(format!("node-{}", uuid::Uuid::new_v4()));
 
-        // Set listen address
+        // Parse listen address
         let listen_addr: SocketAddr = format!("0.0.0.0:{}", listen_port)
             .parse()
             .context("Failed to parse listen address")?;
 
-        // Create QUIC transport options
-        let mut transport_opts = QuicTransportOptions::<
-            SmolStr,
-            SocketAddrResolver<TokioRuntime>,
-            memberlist::quic::stream_layer::quinn::Quinn<TokioRuntime>,
-        >::with_stream_layer_options(node_id.clone(), Default::default());
-        transport_opts.add_bind_address(listen_addr);
-
-        // Create transport
-        let transport = QuicTransport::new(transport_opts)
-            .await
-            .context("Failed to create QUIC transport")?;
+        // Create transport options
+        let net_opts =
+            NetTransportOptions::<SmolStr, TokioSocketAddrResolver, TokioTcp>::new(node_id.clone())
+                .with_bind_addresses([HostAddr::from(listen_addr)].into_iter().collect());
 
         // Create memberlist options with LAN defaults
         let mut opts = Options::lan();
 
-        // Configure encryption with shared key
-        // Derive a 32-byte key for AES-256-GCM
+        // Configure encryption with shared key (AES-256)
         let key_bytes = Self::derive_key(&shared_key);
-        opts = opts.with_primary_key(SecretKey::Aes256Gcm(key_bytes));
+        opts = opts.with_primary_key(SecretKey::Aes256(key_bytes));
 
         println!("Encryption enabled with AES-256-GCM");
         println!("Node ID: {}", node_id);
         println!("Listening on: {}", listen_addr);
 
+        // Create delegate (can customize later for metadata)
+        let delegate = CompositeDelegate::<SmolStr, SocketAddr>::default();
+
         // Create memberlist
-        let memberlist = Memberlist::new(transport, opts)
+        let memberlist = TokioTcpMemberlist::with_delegate(delegate, net_opts, opts)
             .await
             .context("Failed to create memberlist")?;
 
@@ -98,9 +90,11 @@ impl ClusterManager {
 
     /// Attempt to join cluster by contacting peers
     async fn join_peers(
-        memberlist: &Memberlist<TokioQuicTransport>,
+        memberlist: &TokioTcpMemberlist<SmolStr, SocketAddr>,
         peers: Vec<String>,
     ) -> Result<()> {
+        use memberlist::net::Node;
+
         let peer_addrs: Vec<SocketAddr> = peers
             .iter()
             .map(|p| {
@@ -114,9 +108,9 @@ impl ClusterManager {
         // Try to join via each peer
         for addr in peer_addrs {
             // Create a node reference for the peer
-            let peer_node = memberlist::types::Node::new(
+            let peer_node = Node::new(
                 SmolStr::new(format!("peer-{}", addr)),
-                memberlist::types::MaybeResolvedAddress::Resolved(addr),
+                MaybeResolvedAddress::Resolved(addr),
             );
 
             match memberlist.join(peer_node).await {
@@ -149,6 +143,6 @@ impl ClusterManager {
 
     // TODO: Implement methods to:
     // - Get list of cluster members with their metadata
-    // - Update local metadata when backend count changes
+    // - Update local metadata when backend count changes (using NodeDelegate)
     // - Derive remote node proxy addresses from memberlist addresses
 }

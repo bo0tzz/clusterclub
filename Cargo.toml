@@ -8,9 +8,11 @@ pingora = "0.6"
 pingora-core = "0.6"
 pingora-load-balancing = "0.6"
 pingora-proxy = "0.6"
-memberlist = { version = "0.6", features = ["tokio", "quic", "encryption", "snappy"] }
+memberlist = { version = "0.6", features = ["tokio", "quinn", "encryption", "snappy", "dns"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
 anyhow = "1"
 async-trait = "0.1"
+uuid = { version = "1", features = ["v4"] }
+smol_str = "0.3"

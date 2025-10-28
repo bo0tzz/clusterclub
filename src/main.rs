@@ -6,8 +6,17 @@ use anyhow::Result;
 use pingora::server::Server;
 use std::env;
 use std::sync::Arc;
+use tracing_subscriber::{fmt, EnvFilter};
 
 fn main() -> Result<()> {
+    // Initialize tracing/logging
+    // Log level can be controlled via RUST_LOG environment variable
+    // Example: RUST_LOG=debug ./clusterclub config.toml
+    fmt()
+        .with_env_filter(EnvFilter::from_default_env().add_directive("clusterclub=info".parse()?))
+        .with_target(false)
+        .init();
+
     // Parse command line arguments
     let args: Vec<String> = env::args().collect();
 
@@ -19,11 +28,11 @@ fn main() -> Result<()> {
     let config_path = &args[1];
     let config = config::Config::from_file(config_path)?;
 
-    println!("ClusterClub starting...");
-    println!("  Cluster port: {}", config.cluster.listen_port);
-    println!("  Proxy port: {}", config.proxy.listen_port);
-    println!("  Local backends: {}", config.backends.len());
-    println!("  Peers: {}", config.cluster.peers.len());
+    tracing::info!("ClusterClub starting...");
+    tracing::info!(cluster_port = config.cluster.listen_port, "Cluster configuration");
+    tracing::info!(proxy_port = config.proxy.listen_port, "Proxy configuration");
+    tracing::info!(backend_count = config.backends.len(), "Local backends loaded");
+    tracing::info!(peer_count = config.cluster.peers.len(), "Cluster peers configured");
 
     // Initialize cluster (creates its own tokio runtime)
     let backend_count = config.backends.len() as u32;
@@ -68,8 +77,11 @@ fn main() -> Result<()> {
 
     server.add_service(proxy_service);
 
-    println!("Proxy listening on port {}", config.proxy.listen_port);
-    println!("Ready to handle requests!");
+    tracing::info!(
+        proxy_port = config.proxy.listen_port,
+        "Proxy service started and listening"
+    );
+    tracing::info!("ClusterClub is ready to handle requests!");
 
     // Run the server
     server.run_forever();

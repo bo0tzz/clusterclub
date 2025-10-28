@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Node 1 backend
   backend1:
@@ -23,6 +21,8 @@ services:
       dockerfile: Dockerfile
     hostname: node1
     container_name: clusterclub-node1
+    environment:
+      - RUST_LOG=debug
     networks:
       - cluster_network
       - node1_network
@@ -58,6 +58,8 @@ services:
       dockerfile: Dockerfile
     hostname: node2
     container_name: clusterclub-node2
+    environment:
+      - RUST_LOG=debug
     networks:
       - cluster_network
       - node2_network

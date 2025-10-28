@@ -50,18 +50,9 @@ address = "127.0.0.1:3004"
 
 ## Testing Locally
 
-1. Start some test backend servers:
-```bash
-python3 test_backend.py 3003 &
-python3 test_backend.py 3004 &
-```
+1. Start some test backend servers: `docker compose up --build`
 
-2. Start the proxy:
-```bash
-./target/debug/clusterclub config.example.toml
-```
-
-3. Test it:
+2. Test it:
 ```bash
 curl http://localhost:8080/
 ```

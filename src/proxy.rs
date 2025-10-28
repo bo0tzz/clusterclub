@@ -55,17 +55,60 @@ impl ProxyHttp for ClusterProxy {
         session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>, Box<Error>> {
-        // Weighted round-robin selection across all backends (local + remote)
-        // Weight: local backends count individually, each remote peer represents their backends
+        // Check if request is from a peer node by comparing source IP (not port)
+        // If so, only route to local backends to prevent infinite loops
+        let source_ip = session.client_addr();
+        let from_peer = if let Some(addr) = source_ip {
+            let peer_addrs = self.cluster.get_peer_addresses().await;
+            // Compare only IP addresses, not ports (source port is ephemeral)
+            // Parse both to std::net and compare IPs
+            if let Ok(std_addr) = addr.to_string().parse::<std::net::SocketAddr>() {
+                peer_addrs.iter().any(|peer_addr| peer_addr.ip() == std_addr.ip())
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
-        let peer_proxies = self.cluster.get_peer_proxy_addresses().await;
+        if from_peer {
+            // Request came from another cluster node - only route to local backends
+            tracing::debug!(
+                source_ip = ?source_ip,
+                "Request from peer detected, routing to local backend only"
+            );
+
+            let upstream = self
+                .local_lb
+                .select(b"", 256)
+                .ok_or_else(|| {
+                    tracing::error!("No healthy local backends available");
+                    Error::new(ErrorType::ConnectError)
+                })?;
+
+            tracing::info!(backend = ?upstream, "→ Routing to local backend (loop prevention)");
+            return Ok(Box::new(HttpPeer::new(upstream, false, String::new())));
+        }
+
+        // Weighted round-robin selection across all backends (local + remote)
+        // Weight: local backends count individually, peers weighted by their backend counts
+        let peer_info = self.cluster.get_peer_proxy_info().await;
         let local_backend_count = self.cluster.backend_count() as usize;
 
-        // Total weight = local backend count + number of remote peers
-        // (each remote peer is weighted as 1 for now, will use dynamic metadata later)
-        let total_weight = local_backend_count + peer_proxies.len();
+        // Calculate total weight: local backends + sum of peer backend counts
+        let peer_total_weight: usize = peer_info.iter().map(|(_, count)| *count as usize).sum();
+        let total_weight = local_backend_count + peer_total_weight;
+
+        tracing::debug!(
+            local_backend_count = local_backend_count,
+            peer_total_weight = peer_total_weight,
+            total_weight = total_weight,
+            peer_count = peer_info.len(),
+            "Calculated routing weights"
+        );
 
         if total_weight == 0 {
+            tracing::error!("No backends available (local or remote)");
             return Err(Error::new(ErrorType::ConnectError));
         }
 
@@ -73,37 +116,48 @@ impl ProxyHttp for ClusterProxy {
         let request_num = self.request_counter.fetch_add(1, Ordering::Relaxed);
         let target_idx = request_num % total_weight;
 
+        tracing::debug!(
+            request_num = request_num,
+            target_idx = target_idx,
+            "Selected routing target"
+        );
+
         if target_idx < local_backend_count {
             // Route to local backend
             let upstream = self
                 .local_lb
                 .select(b"", 256)
-                .ok_or_else(|| Error::new(ErrorType::ConnectError))?;
+                .ok_or_else(|| {
+                    tracing::error!("No healthy local backends available");
+                    Error::new(ErrorType::ConnectError)
+                })?;
 
-            println!("→ Routing to local backend");
+            tracing::info!(backend = ?upstream, "→ Routing to local backend");
             Ok(Box::new(HttpPeer::new(upstream, false, String::new())))
         } else {
-            // Route to remote peer
-            let peer_idx = target_idx - local_backend_count;
-            let peer_addr = &peer_proxies[peer_idx];
+            // Route to remote peer - find which peer based on weight
+            let mut weight_offset = local_backend_count;
+            for (peer_addr, backend_count) in peer_info {
+                let peer_weight = backend_count as usize;
+                if target_idx < weight_offset + peer_weight {
+                    tracing::info!(
+                        peer = %peer_addr,
+                        backend_count = backend_count,
+                        "→ Routing to remote peer"
+                    );
 
-            println!("→ Routing to remote peer: {}", peer_addr);
-            Ok(Box::new(HttpPeer::new(
-                peer_addr.as_str(),
-                false,
-                String::new(),
-            )))
+                    return Ok(Box::new(HttpPeer::new(
+                        peer_addr.as_str(),
+                        false,
+                        String::new(),
+                    )));
+                }
+                weight_offset += peer_weight;
+            }
+
+            // This should never happen, but handle it gracefully
+            tracing::error!("Weight calculation error in peer selection");
+            Err(Error::new(ErrorType::ConnectError))
         }
-    }
-
-    async fn upstream_request_filter(
-        &self,
-        _session: &mut Session,
-        _upstream_request: &mut RequestHeader,
-        _ctx: &mut Self::CTX,
-    ) -> Result<(), Box<Error>> {
-        // Preserve original Host header
-        // The backend should see the original host, not our internal address
-        Ok(())
     }
 }

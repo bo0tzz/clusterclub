@@ -16,7 +16,6 @@ pub struct ClusterManager {
     memberlist: Arc<Memberlist>,
     backend_count: u32,
     proxy_port: u16, // Port where peer proxies listen for HTTP requests
-    _runtime: tokio::runtime::Runtime, // Keep runtime alive for memberlist background tasks
 }
 
 impl ClusterManager {
@@ -28,9 +27,12 @@ impl ClusterManager {
         backend_count: u32,
         proxy_port: u16,
     ) -> Result<Self> {
-        // Create a dedicated tokio runtime for memberlist
-        let runtime = tokio::runtime::Runtime::new()
-            .context("Failed to create tokio runtime for memberlist")?;
+        // Create a dedicated tokio runtime for memberlist and leak it
+        // This prevents the runtime from being dropped in an async context
+        let runtime = Box::leak(Box::new(
+            tokio::runtime::Runtime::new()
+                .context("Failed to create tokio runtime for memberlist")?
+        ));
 
         // Initialize memberlist in the runtime
         let (memberlist, member_count) = runtime.block_on(async {
@@ -50,15 +52,15 @@ impl ClusterManager {
         // Create memberlist options with LAN defaults
         let mut opts = Options::lan();
 
-        // Configure encryption with shared key (AES-256)
+        // Configure encryption with shared key (AES-256) using HKDF
         let key_bytes = Self::derive_key(&shared_key);
         opts = opts.with_primary_key(SecretKey::Aes256(key_bytes));
 
-        println!("Encryption enabled with AES-256-GCM");
-        println!("Node ID: {}", node_id);
-        println!("Listening on: {}", listen_addr);
+        tracing::info!("Encryption enabled with AES-256-GCM");
+        tracing::info!(node_id = %node_id, "Node ID generated");
+        tracing::info!(listen_addr = %listen_addr, "Listening on address");
 
-        // Create delegate (can customize later for metadata)
+        // Create delegate for memberlist
         let delegate = CompositeDelegate::<SmolStr, SocketAddr>::default();
 
         // Create memberlist
@@ -70,38 +72,34 @@ impl ClusterManager {
         if !peers.is_empty() {
             Self::join_peers(&memberlist, peers).await?;
         } else {
-            println!("No peers configured - running as single-node cluster");
+            tracing::info!("No peers configured - running as single-node cluster");
         }
 
             let member_count = memberlist.num_online_members().await;
             Ok::<_, anyhow::Error>((Arc::new(memberlist), member_count))
         })?;
 
-        println!("Cluster initialized with {} members", member_count);
+        tracing::info!(member_count = member_count, "Cluster initialized");
 
         Ok(ClusterManager {
             memberlist,
             backend_count,
             proxy_port,
-            _runtime: runtime,
         })
     }
 
-    /// Derive a 32-byte key from the shared secret string
-    /// TODO: Use proper KDF like HKDF or PBKDF2 in production
+    /// Derive a 32-byte key from the shared secret string using HKDF-SHA256
     fn derive_key(shared_key: &str) -> [u8; 32] {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use hkdf::Hkdf;
+        use sha2::Sha256;
 
+        let salt = b"clusterclub-memberlist-encryption";
+        let info = b"AES-256-GCM-key";
+
+        let hkdf = Hkdf::<Sha256>::new(Some(salt), shared_key.as_bytes());
         let mut key = [0u8; 32];
-
-        // Hash the key multiple times to fill 32 bytes
-        for i in 0..4 {
-            let mut hasher = DefaultHasher::new();
-            (shared_key, i).hash(&mut hasher);
-            let hash = hasher.finish().to_le_bytes();
-            key[i * 8..(i + 1) * 8].copy_from_slice(&hash);
-        }
+        hkdf.expand(info, &mut key)
+            .expect("HKDF expansion failed - this should never happen");
 
         key
     }
@@ -131,7 +129,7 @@ impl ClusterManager {
             }
         }
 
-        println!("Attempting to join cluster via {} peers...", peer_addrs.len());
+        tracing::info!(peer_count = peer_addrs.len(), "Attempting to join cluster");
 
         // Try to join via each peer
         for addr in peer_addrs {
@@ -143,11 +141,11 @@ impl ClusterManager {
 
             match memberlist.join(peer_node).await {
                 Ok(_) => {
-                    println!("✓ Successfully joined cluster via {}", addr);
+                    tracing::info!(peer_addr = %addr, "Successfully joined cluster");
                     return Ok(());
                 }
                 Err(e) => {
-                    println!("✗ Failed to join via {}: {}", addr, e);
+                    tracing::warn!(peer_addr = %addr, error = %e, "Failed to join via peer");
                     // Continue trying other peers
                 }
             }
@@ -155,13 +153,8 @@ impl ClusterManager {
 
         // If we get here, all join attempts failed
         // This is not fatal - we'll run as a single-node cluster
-        println!("Could not join any peers, running as single-node cluster");
+        tracing::info!("Could not join any peers, running as single-node cluster");
         Ok(())
-    }
-
-    /// Get the number of online cluster members
-    pub async fn member_count(&self) -> usize {
-        self.memberlist.num_online_members().await
     }
 
     /// Get local backend count
@@ -170,7 +163,7 @@ impl ClusterManager {
     }
 
     /// Get list of peer node addresses (for detecting if a request is from a peer)
-    /// Returns a list of SocketAddr representing cluster member addresses
+    /// Returns a list of SocketAddr representing cluster member addresses (cluster gossip IPs)
     pub async fn get_peer_addresses(&self) -> Vec<SocketAddr> {
         let members = self.memberlist.members().await;
         members
@@ -186,27 +179,70 @@ impl ClusterManager {
             .collect()
     }
 
-    /// Get list of peer proxy addresses for HTTP load balancing
-    /// Derives proxy addresses (IP + proxy_port) from cluster member addresses
-    pub async fn get_peer_proxy_addresses(&self) -> Vec<String> {
+    /// Get list of peer proxy addresses with their backend counts for HTTP load balancing
+    /// Returns a list of (proxy_address, backend_count) tuples
+    ///
+    /// NOTE: Currently assumes all peers have the same backend count as local node.
+    /// Future enhancement: Use memberlist metadata (NodeDelegate) to share actual counts.
+    pub async fn get_peer_proxy_info(&self) -> Vec<(String, u32)> {
         let members = self.memberlist.members().await;
-        members
+        let local_id = self.memberlist.local_id();
+
+        tracing::debug!(
+            total_members = members.len(),
+            local_id = %local_id,
+            "Retrieving peer proxy info from memberlist"
+        );
+
+        // Log all member IDs for debugging
+        for member in &members {
+            tracing::debug!(
+                member_id = %member.id(),
+                member_addr = %member.address(),
+                is_local = (member.id() == local_id),
+                "Inspecting cluster member"
+            );
+        }
+
+        let peers: Vec<_> = members
             .iter()
             .filter_map(|member| {
                 // Get the member's IP and construct proxy address
-                if member.id() != self.memberlist.local_id() {
+                let is_local = member.id() == local_id;
+
+                tracing::debug!(
+                    member_id = %member.id(),
+                    local_id = %local_id,
+                    is_local = is_local,
+                    "Comparing member ID with local ID"
+                );
+
+                if !is_local {
                     let cluster_addr = member.address();
                     // Use the IP from cluster address but with proxy port
                     let proxy_addr = format!("{}:{}", cluster_addr.ip(), self.proxy_port);
-                    Some(proxy_addr)
+
+                    // For now, assume peers have same backend count as us
+                    // TODO: Implement NodeDelegate to share actual backend counts
+                    let backend_count = self.backend_count;
+
+                    tracing::debug!(
+                        peer_id = %member.id(),
+                        peer_addr = %proxy_addr,
+                        backend_count = backend_count,
+                        "Found peer in cluster"
+                    );
+
+                    Some((proxy_addr, backend_count))
                 } else {
+                    tracing::debug!(member_id = %member.id(), "Skipping local node from peer list");
                     None
                 }
             })
-            .collect()
+            .collect();
+
+        tracing::info!(peer_count = peers.len(), "Peer proxy addresses retrieved");
+        peers
     }
 
-    // TODO: Implement methods to:
-    // - Get list of cluster members with their metadata
-    // - Update local metadata when backend count changes (using NodeDelegate)
 }

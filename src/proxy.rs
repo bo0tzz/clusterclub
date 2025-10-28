@@ -15,7 +15,7 @@ pub struct ClusterProxy {
 }
 
 impl ClusterProxy {
-    pub fn new(local_backends: Vec<String>) -> Result<LoadBalancer<RoundRobin>> {
+    pub fn create_load_balancer(local_backends: Vec<String>) -> Result<LoadBalancer<RoundRobin>> {
         // Create load balancer with local backends
         let mut upstreams = LoadBalancer::try_from_iter(local_backends)?;
 
@@ -30,7 +30,7 @@ impl ClusterProxy {
         Ok(upstreams)
     }
 
-    pub fn with_load_balancer(local_lb: Arc<LoadBalancer<RoundRobin>>) -> Self {
+    pub fn new(local_lb: Arc<LoadBalancer<RoundRobin>>) -> Self {
         ClusterProxy { local_lb }
     }
 }

@@ -30,7 +30,7 @@ fn main() -> Result<()> {
         .map(|b| b.address.clone())
         .collect();
 
-    let upstreams = proxy::ClusterProxy::new(backend_addrs)?;
+    let upstreams = proxy::ClusterProxy::create_load_balancer(backend_addrs)?;
 
     // Create pingora server
     let mut server = Server::new(None)?;
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
     server.add_service(lb_service);
 
     // Create proxy with the shared load balancer
-    let proxy = proxy::ClusterProxy::with_load_balancer(lb);
+    let proxy = proxy::ClusterProxy::new(lb);
 
     // Create HTTP proxy service
     let mut proxy_service = pingora_proxy::http_proxy_service(

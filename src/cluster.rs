@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use memberlist::delegate::CompositeDelegate;
 use memberlist::net::NetTransportOptions;
-use memberlist::proto::{MaybeResolvedAddress, SecretKey};
+use memberlist::proto::{EncryptionAlgorithm, MaybeResolvedAddress, SecretKey, SecretKeys};
 use memberlist::tokio::{TokioSocketAddrResolver, TokioTcp, TokioTcpMemberlist};
 use memberlist::Options;
 use smol_str::SmolStr;
@@ -9,7 +9,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 // The memberlist type - explicitly specify delegate with SocketAddr as address type
-type Memberlist = TokioTcpMemberlist<SmolStr, TokioSocketAddrResolver, CompositeDelegate<SmolStr, SocketAddr>>;
+type Memberlist =
+    TokioTcpMemberlist<SmolStr, TokioSocketAddrResolver, CompositeDelegate<SmolStr, SocketAddr>>;
 
 /// Cluster manager using memberlist for gossip protocol
 pub struct ClusterManager {
@@ -31,42 +32,44 @@ impl ClusterManager {
         // This prevents the runtime from being dropped in an async context
         let runtime = Box::leak(Box::new(
             tokio::runtime::Runtime::new()
-                .context("Failed to create tokio runtime for memberlist")?
+                .context("Failed to create tokio runtime for memberlist")?,
         ));
 
-        // Initialize memberlist in the runtime
         let (memberlist, member_count) = runtime.block_on(async {
-        // Generate a unique node ID
-        let node_id = SmolStr::new(format!("node-{}", uuid::Uuid::new_v4()));
+            let node_id = SmolStr::new(format!("node-{}", uuid::Uuid::new_v4()));
 
-        // Parse listen address
-        let listen_addr: SocketAddr = format!("0.0.0.0:{}", listen_port)
-            .parse()
-            .context("Failed to parse listen address")?;
+            let listen_addr: SocketAddr = format!("0.0.0.0:{}", listen_port)
+                .parse()
+                .context("Failed to parse listen address")?;
 
-        // Create transport options
-        let net_opts =
-            NetTransportOptions::<SmolStr, TokioSocketAddrResolver, TokioTcp>::new(node_id.clone())
-                .with_bind_addresses([listen_addr].into_iter().collect());
+            tracing::info!(node_id = %node_id, "Node ID generated");
+            tracing::info!(listen_addr = %listen_addr, "Listening on address");
 
-        // Create memberlist options with LAN defaults
-        let mut opts = Options::lan();
+            let net_opts = NetTransportOptions::<SmolStr, TokioSocketAddrResolver, TokioTcp>::new(
+                node_id.clone(),
+            )
+            .with_bind_addresses([listen_addr].into_iter().collect());
 
-        // Configure encryption with shared key (AES-256) using HKDF
-        let key_bytes = Self::derive_key(&shared_key);
-        opts = opts.with_primary_key(SecretKey::Aes256(key_bytes));
+            let mut opts = Options::lan();
 
-        tracing::info!("Encryption enabled with AES-256-GCM");
-        tracing::info!(node_id = %node_id, "Node ID generated");
-        tracing::info!(listen_addr = %listen_addr, "Listening on address");
+            let key_bytes = Self::derive_key(&shared_key);
+            let secret_key = SecretKey::Aes256(key_bytes);
 
-        // Create delegate for memberlist
-        let delegate = CompositeDelegate::<SmolStr, SocketAddr>::default();
+            let mut secret_keys = SecretKeys::new();
+            secret_keys.push(secret_key);
 
-        // Create memberlist
-        let memberlist = TokioTcpMemberlist::with_delegate(delegate, net_opts, opts)
-            .await
-            .context("Failed to create memberlist")?;
+            opts = opts
+                .with_primary_key(secret_key)
+                .with_secret_keys(secret_keys)
+                .with_encryption_algo(EncryptionAlgorithm::NoPadding)
+                .with_gossip_verify_incoming(true)
+                .with_gossip_verify_outgoing(true);
+
+            let delegate = CompositeDelegate::<SmolStr, SocketAddr>::default();
+
+            let memberlist = TokioTcpMemberlist::with_delegate(delegate, net_opts, opts)
+                .await
+                .context("Failed to create memberlist")?;
 
         // Join cluster if peers are provided
         if !peers.is_empty() {
@@ -104,22 +107,23 @@ impl ClusterManager {
         key
     }
 
-    /// Attempt to join cluster by contacting peers
+    //TODO: Refactor to resolve_peers and use memberlist.join_many
     async fn join_peers(
-        memberlist: &TokioTcpMemberlist<SmolStr, TokioSocketAddrResolver, CompositeDelegate<SmolStr, SocketAddr>>,
+        memberlist: &TokioTcpMemberlist<
+            SmolStr,
+            TokioSocketAddrResolver,
+            CompositeDelegate<SmolStr, SocketAddr>,
+        >,
         peers: Vec<String>,
     ) -> Result<()> {
         use memberlist::net::Node;
         use tokio::net::lookup_host;
 
-        // Resolve peer addresses (supports both IPs and hostnames)
         let mut peer_addrs = Vec::new();
         for peer in peers {
-            // Try direct parse first (for IP:port)
             if let Ok(addr) = peer.parse::<SocketAddr>() {
                 peer_addrs.push(addr);
             } else {
-                // Otherwise, resolve the hostname
                 let resolved = lookup_host(&peer)
                     .await
                     .with_context(|| format!("Failed to resolve peer address: {}", peer))?
@@ -131,9 +135,7 @@ impl ClusterManager {
 
         tracing::info!(peer_count = peer_addrs.len(), "Attempting to join cluster");
 
-        // Try to join via each peer
         for addr in peer_addrs {
-            // Create a node reference for the peer
             let peer_node = Node::new(
                 SmolStr::new(format!("peer-{}", addr)),
                 MaybeResolvedAddress::Resolved(addr),
@@ -146,30 +148,23 @@ impl ClusterManager {
                 }
                 Err(e) => {
                     tracing::warn!(peer_addr = %addr, error = %e, "Failed to join via peer");
-                    // Continue trying other peers
                 }
             }
         }
 
-        // If we get here, all join attempts failed
-        // This is not fatal - we'll run as a single-node cluster
         tracing::info!("Could not join any peers, running as single-node cluster");
         Ok(())
     }
 
-    /// Get local backend count
     pub fn backend_count(&self) -> u32 {
         self.backend_count
     }
 
-    /// Get list of peer node addresses (for detecting if a request is from a peer)
-    /// Returns a list of SocketAddr representing cluster member addresses (cluster gossip IPs)
     pub async fn get_peer_addresses(&self) -> Vec<SocketAddr> {
         let members = self.memberlist.members().await;
         members
             .iter()
             .filter_map(|member| {
-                // Get the member's address if it's not the local node
                 if member.id() != self.memberlist.local_id() {
                     Some(*member.address())
                 } else {
@@ -179,11 +174,6 @@ impl ClusterManager {
             .collect()
     }
 
-    /// Get list of peer proxy addresses with their backend counts for HTTP load balancing
-    /// Returns a list of (proxy_address, backend_count) tuples
-    ///
-    /// NOTE: Currently assumes all peers have the same backend count as local node.
-    /// Future enhancement: Use memberlist metadata (NodeDelegate) to share actual counts.
     pub async fn get_peer_proxy_info(&self) -> Vec<(String, u32)> {
         let members = self.memberlist.members().await;
         let local_id = self.memberlist.local_id();
@@ -194,7 +184,6 @@ impl ClusterManager {
             "Retrieving peer proxy info from memberlist"
         );
 
-        // Log all member IDs for debugging
         for member in &members {
             tracing::debug!(
                 member_id = %member.id(),
@@ -207,7 +196,6 @@ impl ClusterManager {
         let peers: Vec<_> = members
             .iter()
             .filter_map(|member| {
-                // Get the member's IP and construct proxy address
                 let is_local = member.id() == local_id;
 
                 tracing::debug!(
@@ -219,7 +207,6 @@ impl ClusterManager {
 
                 if !is_local {
                     let cluster_addr = member.address();
-                    // Use the IP from cluster address but with proxy port
                     let proxy_addr = format!("{}:{}", cluster_addr.ip(), self.proxy_port);
 
                     // For now, assume peers have same backend count as us
@@ -244,5 +231,4 @@ impl ClusterManager {
         tracing::info!(peer_count = peers.len(), "Peer proxy addresses retrieved");
         peers
     }
-
 }

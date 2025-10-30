@@ -9,9 +9,6 @@ use std::sync::Arc;
 use tracing_subscriber::{fmt, EnvFilter};
 
 fn main() -> Result<()> {
-    // Initialize tracing/logging
-    // Log level can be controlled via RUST_LOG environment variable
-    // Example: RUST_LOG=debug ./clusterclub config.toml
     fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("clusterclub=info".parse()?))
         .with_target(false)
@@ -34,7 +31,6 @@ fn main() -> Result<()> {
     tracing::info!(backend_count = config.backends.len(), "Local backends loaded");
     tracing::info!(peer_count = config.cluster.peers.len(), "Cluster peers configured");
 
-    // Initialize cluster (creates its own tokio runtime)
     let backend_count = config.backends.len() as u32;
     let cluster = Arc::new(cluster::ClusterManager::new(
         config.cluster.listen_port,

@@ -10,11 +10,11 @@ A distributed load balancer built with Rust, using Pingora for proxying and Memb
 
 ## Current Status
 
-✅ Basic pingora proxy with local backends
-✅ Health checks with automatic failover
-🚧 Memberlist cluster integration
-🚧 Source IP-based routing detection
-🚧 Cluster-wide load balancing
+✅ Basic pingora proxy with local backends  
+✅ Health checks with automatic failover  
+✅ Memberlist cluster integration  
+✅ Source IP-based routing detection  
+✅ Cluster-wide load balancing  
 
 ## Building
 
@@ -76,8 +76,4 @@ You should see round-robin responses from different backend ports.
 
 ## TODO
 
-- [ ] Implement memberlist cluster integration
-- [ ] Add source IP-based routing detection
-- [ ] Create custom ServiceDiscovery for memberlist
-- [ ] Integrate two-tier load balancing (local vs cluster)
 - [ ] TODO: Dynamically update metadata to reflect healthy backend count (currently static)

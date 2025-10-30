@@ -1,6 +1,9 @@
 # ClusterClub Configuration Example
 
 [cluster]
+# The address this node will advertise to other cluster members (optional
+# advertise_address = "1.2.3.4"
+
 # Port for memberlist gossip protocol (default: 7946)
 listen_port = 7946
 

@@ -33,6 +33,7 @@ fn main() -> Result<()> {
 
     let backend_count = config.backends.len() as u32;
     let cluster = Arc::new(cluster::ClusterManager::new(
+        config.cluster.advertise_address,
         config.cluster.listen_port,
         config.cluster.shared_key.clone(),
         config.cluster.peers.clone(),

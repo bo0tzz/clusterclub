@@ -22,6 +22,7 @@ pub struct ClusterManager {
 impl ClusterManager {
     /// Create and join a memberlist cluster
     pub fn new(
+        advertise_address: Option<String>,
         listen_port: u16,
         shared_key: String,
         peers: Vec<String>,
@@ -45,10 +46,20 @@ impl ClusterManager {
             tracing::info!(node_id = %node_id, "Node ID generated");
             tracing::info!(listen_addr = %listen_addr, "Listening on address");
 
-            let net_opts = NetTransportOptions::<SmolStr, TokioSocketAddrResolver, TokioTcp>::new(
-                node_id.clone(),
-            )
-            .with_bind_addresses([listen_addr].into_iter().collect());
+            let mut net_opts =
+                NetTransportOptions::<SmolStr, TokioSocketAddrResolver, TokioTcp>::new(
+                    node_id.clone(),
+                );
+
+            //if advertise_address, parse it to socketaddr and add_bind_address
+            if let Some(addr_str) = advertise_address {
+                let advertise_addr: SocketAddr = format!("{}:{}", addr_str, listen_port)
+                    .parse()
+                    .context("Failed to parse advertise address")?;
+                net_opts.add_bind_address(advertise_addr);
+            }
+
+            net_opts.add_bind_address(listen_addr);
 
             let mut opts = Options::lan();
 
@@ -71,12 +82,15 @@ impl ClusterManager {
                 .await
                 .context("Failed to create memberlist")?;
 
-        // Join cluster if peers are provided
-        if !peers.is_empty() {
-            Self::join_peers(&memberlist, peers).await?;
-        } else {
-            tracing::info!("No peers configured - running as single-node cluster");
-        }
+            let advertise_address = memberlist.advertise_address();
+            tracing::info!(advertise_address = %advertise_address, "Memberlist running with");
+
+            // Join cluster if peers are provided
+            if !peers.is_empty() {
+                Self::join_peers(&memberlist, peers).await?;
+            } else {
+                tracing::info!("No peers configured - running as single-node cluster");
+            }
 
             let member_count = memberlist.num_online_members().await;
             Ok::<_, anyhow::Error>((Arc::new(memberlist), member_count))

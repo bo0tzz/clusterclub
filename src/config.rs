@@ -12,6 +12,8 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClusterConfig {
+    /// Address to advertise to other cluster members
+    pub advertise_address: Option<String>,
     /// Port for memberlist gossip protocol
     pub listen_port: u16,
     /// Shared secret key for cluster authentication/encryption
@@ -96,6 +98,7 @@ mod tests {
     fn test_config_validation() {
         let config = Config {
             cluster: ClusterConfig {
+                advertise_address: None,
                 listen_port: 7946,
                 shared_key: "test-key".to_string(),
                 peers: vec!["192.168.1.10:7946".to_string()],

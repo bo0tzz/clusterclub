@@ -26,10 +26,19 @@ fn main() -> Result<()> {
     let config = config::Config::from_file(config_path)?;
 
     tracing::info!("ClusterClub starting...");
-    tracing::info!(cluster_port = config.cluster.listen_port, "Cluster configuration");
+    tracing::info!(
+        cluster_port = config.cluster.listen_port,
+        "Cluster configuration"
+    );
     tracing::info!(proxy_port = config.proxy.listen_port, "Proxy configuration");
-    tracing::info!(backend_count = config.backends.len(), "Local backends loaded");
-    tracing::info!(peer_count = config.cluster.peers.len(), "Cluster peers configured");
+    tracing::info!(
+        backend_count = config.backends.len(),
+        "Local backends loaded"
+    );
+    tracing::info!(
+        peer_count = config.cluster.peers.len(),
+        "Cluster peers configured"
+    );
 
     let backend_count = config.backends.len() as u32;
     let cluster = Arc::new(cluster::ClusterManager::new(
@@ -42,11 +51,7 @@ fn main() -> Result<()> {
     )?);
 
     // Create proxy with local backends
-    let backend_addrs: Vec<String> = config
-        .backends
-        .iter()
-        .map(|b| b.address.clone())
-        .collect();
+    let backend_addrs: Vec<String> = config.backends.iter().map(|b| b.address.clone()).collect();
 
     let upstreams = proxy::ClusterProxy::create_load_balancer(backend_addrs)?;
 
@@ -66,10 +71,7 @@ fn main() -> Result<()> {
     let proxy = proxy::ClusterProxy::new(lb, cluster);
 
     // Create HTTP proxy service
-    let mut proxy_service = pingora_proxy::http_proxy_service(
-        &server.configuration,
-        proxy,
-    );
+    let mut proxy_service = pingora_proxy::http_proxy_service(&server.configuration, proxy);
     proxy_service.add_tcp(&format!("0.0.0.0:{}", config.proxy.listen_port));
 
     server.add_service(proxy_service);

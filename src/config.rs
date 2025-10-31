@@ -41,8 +41,8 @@ impl Config {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read config file: {:?}", path.as_ref()))?;
 
-        let config: Config = toml::from_str(&content)
-            .context("Failed to parse TOML configuration")?;
+        let config: Config =
+            toml::from_str(&content).context("Failed to parse TOML configuration")?;
 
         config.validate()?;
         Ok(config)
@@ -51,7 +51,10 @@ impl Config {
     /// Validate configuration values
     fn validate(&self) -> Result<()> {
         // Ensure we have at least one backend
-        anyhow::ensure!(!self.backends.is_empty(), "At least one backend must be configured");
+        anyhow::ensure!(
+            !self.backends.is_empty(),
+            "At least one backend must be configured"
+        );
 
         // Validate that all backend addresses have host:port format
         for backend in &self.backends {
@@ -103,14 +106,10 @@ mod tests {
                 shared_key: "test-key".to_string(),
                 peers: vec!["192.168.1.10:7946".to_string()],
             },
-            proxy: ProxyConfig {
-                listen_port: 8080,
-            },
-            backends: vec![
-                BackendConfig {
-                    address: "localhost:3003".to_string(),
-                },
-            ],
+            proxy: ProxyConfig { listen_port: 8080 },
+            backends: vec![BackendConfig {
+                address: "localhost:3003".to_string(),
+            }],
         };
 
         // Both hostnames and IPs should be valid

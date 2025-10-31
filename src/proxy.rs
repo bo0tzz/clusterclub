@@ -2,11 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use pingora::prelude::*;
 use pingora_core::upstreams::peer::HttpPeer;
-use pingora_load_balancing::{
-    health_check::TcpHealthCheck,
-    selection::RoundRobin,
-    LoadBalancer,
-};
+use pingora_load_balancing::{health_check::TcpHealthCheck, selection::RoundRobin, LoadBalancer};
 use pingora_proxy::{ProxyHttp, Session};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -63,7 +59,9 @@ impl ProxyHttp for ClusterProxy {
             // Compare only IP addresses, not ports (source port is ephemeral)
             // Parse both to std::net and compare IPs
             if let Ok(std_addr) = addr.to_string().parse::<std::net::SocketAddr>() {
-                peer_addrs.iter().any(|peer_addr| peer_addr.ip() == std_addr.ip())
+                peer_addrs
+                    .iter()
+                    .any(|peer_addr| peer_addr.ip() == std_addr.ip())
             } else {
                 false
             }
@@ -78,13 +76,10 @@ impl ProxyHttp for ClusterProxy {
                 "Request from peer detected, routing to local backend only"
             );
 
-            let upstream = self
-                .local_lb
-                .select(b"", 256)
-                .ok_or_else(|| {
-                    tracing::error!("No healthy local backends available");
-                    Error::new(ErrorType::ConnectError)
-                })?;
+            let upstream = self.local_lb.select(b"", 256).ok_or_else(|| {
+                tracing::error!("No healthy local backends available");
+                Error::new(ErrorType::ConnectError)
+            })?;
 
             tracing::info!(backend = ?upstream, "→ Routing to local backend (loop prevention)");
             return Ok(Box::new(HttpPeer::new(upstream, false, String::new())));
@@ -124,13 +119,10 @@ impl ProxyHttp for ClusterProxy {
 
         if target_idx < local_backend_count {
             // Route to local backend
-            let upstream = self
-                .local_lb
-                .select(b"", 256)
-                .ok_or_else(|| {
-                    tracing::error!("No healthy local backends available");
-                    Error::new(ErrorType::ConnectError)
-                })?;
+            let upstream = self.local_lb.select(b"", 256).ok_or_else(|| {
+                tracing::error!("No healthy local backends available");
+                Error::new(ErrorType::ConnectError)
+            })?;
 
             tracing::info!(backend = ?upstream, "→ Routing to local backend");
             Ok(Box::new(HttpPeer::new(upstream, false, String::new())))

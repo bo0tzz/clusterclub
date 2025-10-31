@@ -39,27 +39,22 @@ impl ClusterManager {
         let (memberlist, member_count) = runtime.block_on(async {
             let node_id = SmolStr::new(format!("node-{}", uuid::Uuid::new_v4()));
 
-            let listen_addr: SocketAddr = format!("0.0.0.0:{}", listen_port)
-                .parse()
-                .context("Failed to parse listen address")?;
+            let listen_addr: SocketAddr = match advertise_address {
+                Some(addr_str) => format!("{}:{}", addr_str, listen_port)
+                    .parse()
+                    .context("Failed to parse advertise address")?,
+                None => format!("0.0.0.0:{}", listen_port)
+                    .parse()
+                    .context("Failed to parse listen address")?,
+            };
 
             tracing::info!(node_id = %node_id, "Node ID generated");
             tracing::info!(listen_addr = %listen_addr, "Listening on address");
 
-            let mut net_opts =
-                NetTransportOptions::<SmolStr, TokioSocketAddrResolver, TokioTcp>::new(
-                    node_id.clone(),
-                );
-
-            //if advertise_address, parse it to socketaddr and add_bind_address
-            if let Some(addr_str) = advertise_address {
-                let advertise_addr: SocketAddr = format!("{}:{}", addr_str, listen_port)
-                    .parse()
-                    .context("Failed to parse advertise address")?;
-                net_opts.add_bind_address(advertise_addr);
-            }
-
-            net_opts.add_bind_address(listen_addr);
+            let net_opts = NetTransportOptions::<SmolStr, TokioSocketAddrResolver, TokioTcp>::new(
+                node_id.clone(),
+            )
+            .with_bind_addresses([listen_addr].into_iter().collect());
 
             let mut opts = Options::lan();
 

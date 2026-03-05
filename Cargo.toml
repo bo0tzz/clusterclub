@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 pingora = "0.6"
-pingora-core = "0.6"
+pingora-core = "0.8"
 pingora-load-balancing = "0.6"
 pingora-proxy = "0.6"
 memberlist = { version = "0.6", features = ["tokio", "tcp", "encryption", "snappy"] }

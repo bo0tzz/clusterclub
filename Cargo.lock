@@ -652,7 +652,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93f85c3824e4191621dec0551e3cef3d511f329da9a8990bf3e450a85651d97e"
 dependencies = [
  "backtrace",
- "rand 0.8.5",
+ "rand 0.8.6",
  "tokio",
  "trackable",
 ]
@@ -1496,7 +1496,7 @@ dependencies = [
  "idna",
  "ipnet",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.8.6",
  "thiserror 1.0.69",
  "tinyvec",
  "tracing",
@@ -1516,7 +1516,7 @@ dependencies = [
  "lru-cache",
  "once_cell",
  "parking_lot",
- "rand 0.8.5",
+ "rand 0.8.6",
  "resolv-conf",
  "smallvec",
  "thiserror 1.0.69",
@@ -2371,7 +2371,7 @@ dependencies = [
  "pingora-http",
  "pingora-lru",
  "pingora-timeout",
- "rand 0.8.5",
+ "rand 0.8.6",
  "regex",
  "rmp",
  "rmp-serde",
@@ -2413,7 +2413,7 @@ dependencies = [
  "pingora-runtime",
  "pingora-timeout",
  "prometheus",
- "rand 0.8.5",
+ "rand 0.8.6",
  "regex",
  "serde",
  "serde_yaml",
@@ -2488,7 +2488,7 @@ dependencies = [
  "pingora-http",
  "pingora-ketama",
  "pingora-runtime",
- "rand 0.8.5",
+ "rand 0.8.6",
  "tokio",
 ]
 
@@ -2501,7 +2501,7 @@ dependencies = [
  "arrayvec",
  "hashbrown 0.16.0",
  "parking_lot",
- "rand 0.8.5",
+ "rand 0.8.6",
 ]
 
 [[package]]
@@ -2537,7 +2537,7 @@ dependencies = [
  "pingora-core",
  "pingora-error",
  "pingora-http",
- "rand 0.8.5",
+ "rand 0.8.6",
  "regex",
  "tokio",
 ]
@@ -2549,7 +2549,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ccc165021cf55a39b9e760121b22c4260b17a0b2c530d5b93092fc5bc765b94"
 dependencies = [
  "once_cell",
- "rand 0.8.5",
+ "rand 0.8.6",
  "thread_local",
  "tokio",
 ]
@@ -2797,9 +2797,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
